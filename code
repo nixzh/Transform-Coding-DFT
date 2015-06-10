@@ -1,0 +1,164 @@
+#include <opencv2/opencv.hpp>
+#include <istream>
+#include <string>
+#include <math.h>
+
+using namespace std;
+using namespace cv;
+
+float calRms(Mat img1, Mat img2)//计算均方根误差函数
+{
+	float e ;
+	unsigned a = 0;
+	int m = img1.rows, n = img1.cols;
+	for (int i = 0; i < m; i++)
+	{
+		for (int j = 0; j < n; j++)
+		{
+			a = a + pow((img2.at<uchar>(i, j) - img1.at<uchar>(i, j)), 2);
+		}
+	}
+	e = pow(a / m / n, 0.5);
+	return e;
+}
+float calSnr(Mat img1, Mat img2)//计算信噪比函数
+{
+	float s;
+	unsigned a = 0, b = 0;
+	int m = img1.rows, n = img1.cols;
+	for (int i = 0; i < m; i++)
+	{
+		for (int j = 0; j < n; j++)
+		{
+			a = a + pow((img2.at<uchar>(i, j) - img1.at<uchar>(i, j)), 2);
+			b = b + pow(img2.at<uchar>(i, j), 2);
+		}
+	}
+	s = b / a;
+	return s;
+}
+
+int main()
+{
+	char k[100];
+	cout << "the path og image：" << endl;
+	cin.getline(k, 100);
+	Mat img1 = imread(k,0);
+	if (img1.empty())
+	{
+		cout << "error!" << endl;
+		return -1;
+	}//读取图片
+	int y;
+	cout << "the number of largest：" << endl;
+	cin >> y;
+	int a = img1.rows % 8;
+	int b = img1.cols % 8;
+	int row, col;
+	if (a == 0)
+	{
+		row = img1.rows / 8;
+	}
+	else
+	{
+		row = img1.rows / 8 + 1;
+	}
+	if (b == 0)
+	{
+		col = img1.cols / 8;
+	}
+	else
+	{
+		col = img1.cols / 8 + 1;
+	}
+	Mat img2;
+	copyMakeBorder(img1, img2, 0, 8*row-img1.rows, 0, 8*col-img1.cols, BORDER_CONSTANT, Scalar::all(0));//扩展图片尺寸（8的整数倍）
+	for (int i = 0; i < row; i++)
+	{
+		for (int j = 0; j < col; j++)
+		{
+			Mat img(8,8,CV_8UC1);
+			for (int r = i * 8,f = 0; r < i * 8 + 8,f < 8; r++,f++)//读取8*8个数据
+			{
+				for (int t = j * 8,g = 0; t < j * 8 + 8,g < 8; t++,g++)
+				{
+					img.at<uchar>(f, g) = img2.at<uchar>(r, t);
+				}
+			}
+		   Mat plane[] = { Mat_<float>(img), Mat::zeros(img.size(), CV_32F) };//设置两个通道
+		   Mat img3;
+		   merge(plane,2,img3);//合并两个通道
+		   dft(img3, img3,DFT_INVERSE);//傅里叶变换
+		   //split(img3, plane);
+		   Mat img3f(img3.size(), CV_32FC1);
+		   for (int f = 0; f < img3.rows; f++)//计算傅里叶变换后的幅值
+		   {
+			   for (int g = 0; g < img3.cols; g++)
+			   {
+				   float k = img3.at<Vec2f>(f, g)[0];
+				   float h = img3.at<Vec2f>(f, g)[1];
+				   img3f.at<float>(f, g) = pow((pow(k, 2) + pow(h, 2)), 0.5);
+				   //magnitude(plane[0], plane[1], img3f);
+			   }
+		   }
+		   Mat T = Mat::zeros(1, 8, CV_32FC1), X=Mat::zeros(1, 8, CV_8UC1), Y=Mat::zeros(1, 8, CV_8UC1),mask=Mat::zeros(img3.size(),CV_8UC1);
+		   for (int n = 0; n < y; n++)//获取阈值
+		  {
+			   for (int c = 0; c < 8; c++)
+			   {
+				   for (int d = 0; d < 8; d++)
+				   {
+					   if (img3f.at<float>(c, d)>T.at <float>(0, n))
+					   {
+						   T.at<float>(0, n) = img3f.at<float>(c, d);
+						   X.at<uchar>(0, n) = c;
+						   Y.at<uchar>(0, n) = d;
+					   }
+				   }
+			   }
+			   img3f.at<float>(X.at<uchar>(0, n), Y.at<uchar>(0, n)) = 0;
+			   mask.at<uchar>(X.at<uchar>(0, n), Y.at<uchar>(0, n)) = 1;//得到模板
+		  }
+		   for (int q = 0; q < img3.rows; q++)//量化
+		   {
+			   for (int p = 0; p < img3.cols; p++)
+			   {
+				   img3.at<Vec2f>(q, p)[0] = img3.at<Vec2f>(q, p)[0]*mask.at<uchar>(q, p);
+				   img3.at<Vec2f>(q, p)[1] = img3.at<Vec2f>(q, p)[1] * mask.at<uchar>(q, p);
+			   }
+		   }
+		  idft(img3, img3);//傅里叶反变换
+		  split(img3, plane);//分开两个通道
+		  Mat img4 = plane[0];//取实部
+		  double pixel_max, pixel_min;
+		  minMaxLoc(img, &pixel_min, &pixel_max);
+		  normalize(img4, img4, pixel_max, pixel_min, NORM_MINMAX);
+		  for (int r = i * 8,f = 0; r < i * 8 + 8,f < 8; r++,f++)//最终计算结果返回原位置
+		  {
+			  for (int t = j * 8,g = 0; t < j * 8 + 8,g < 8; t++,g++)
+			  {
+					img2.at<uchar>(r, t) = img4.at<float>(f, g);
+			  }
+		  }
+	   }
+    }
+	for (int u = 0; u < img1.rows; u++)//获得原图像大小的处理后图像
+	{
+		for (int v = 0; v < img1.cols; v++)
+		{
+			img1.at<uchar>(u, v) = img2.at<uchar>(u, v);
+		}
+	}
+	Mat img5 = imread(k, 0);
+	float e = calRms(img5, img1);
+	float s = calSnr(img5, img1);
+	imwrite("F://transform_dft.tif", img1);
+	cout << "**********" << endl;
+	cout << "均方根误差=" << e << endl;
+	cout << "信噪比=" << s << endl;
+	cout << "**********" << endl;
+	imshow("source image",img5);
+	imshow("transform_dft image", img1);
+	waitKey();
+	return 0;
+}
